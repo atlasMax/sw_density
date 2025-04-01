@@ -10,7 +10,7 @@ import matplotlib as mpl
 from matplotlib.widgets import Button
 from scipy import constants
 from scipy import stats
-from epsd_peakfinder_exp import epsd_peakfinder
+from epsd_peakfinder_exp2 import epsd_peakfinder
 from ne_from_scpot import fit_ne
 
 from pyrfu import mms, pyrf
