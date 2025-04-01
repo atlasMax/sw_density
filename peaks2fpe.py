@@ -2,12 +2,10 @@ import os
 import csv
 
 import numpy as np
-import xarray as xr
 
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import matplotlib as mpl
-from matplotlib.widgets import Button
 from scipy import constants
 from scipy import stats
 from epsd_peakfinder_exp2 import epsd_peakfinder

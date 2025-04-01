@@ -1,0 +1,258 @@
+import glob
+import numpy as np
+import logging
+import os
+import csv
+import sys
+
+from pyrfu import mms, pyrf
+
+import multiprocessing as mp
+from tqdm import tqdm
+
+# Suppress INFO messages
+logger = logging.getLogger()
+logger.setLevel(logging.WARNING)  # Suppress INFO messages
+
+def _read_regionfiles_to_swtints(folder, ic):
+    print(f'Region files for MMS{ic} at...',end='')
+    
+    # Get region file for specified S/C names by glob
+    dir_regs = "mms-regionfiles/"
+    file_pattern = dir_regs + f"mms{ic}_edp_sdp_regions_*"
+    filenames = glob.glob(file_pattern)
+    print(f'{file_pattern}')
+    
+    # Initialize an empty list to store the tint pairs
+    sw_tints = []
+
+    for filepath in filenames:
+        print('\t'+filepath)
+        # Load data with times and region flags
+        region_data = np.genfromtxt(filepath, skip_header=True, dtype=str)
+        times, region_flags = np.hsplit(region_data, 2)
+
+        # Iterate through rows and check region flag for solar wind region (flag == '1')
+        nrows = len(times)
+        for row in range(1, nrows - 1):
+            if region_flags[row] == '1':
+                # Create a tint spanning from times[i-1] to times[i+1]
+                sw_tint = [times[row][0][:-1], times[row+1][0][:-1]]
+                
+                # Prevent duplicates: Check if tint is unique. If not, do not add
+                if sw_tint not in sw_tints:
+                    sw_tints.append(sw_tint)
+
+    # Convert the list of tints to a NumPy array
+    sw_tints = np.array(sw_tints)
+    filename = f'mms{ic}_sw_tints.txt'
+    print('\t'+20*'-')
+    print('\t>'+f' Saving to {folder+filename}...')
+    print('\t'+20*'-'+'\n')
+    np.savetxt(folder+filename, sw_tints, fmt='%s', delimiter=' ')
+    return sw_tints, filename
+        
+
+
+def _check_vsc(ts_mask, tint, ic):
+    try:
+        vsc_ = mms.get_data("v_edp_fast_l2", tint, ic)
+    except FileNotFoundError:
+        # print('NO EDP DATA FOUND FOR TINT', tint, '--- SKIPPING!')
+        return None
+
+
+    if vsc_.time.size > 0:
+        vsc = vsc_.drop_duplicates(dim='time')
+        # ts_mask = pyrf.resample(ts_mask, vsc.time)
+        vsc = pyrf.resample(vsc, ts_mask.time)
+
+        # ts_mask[np.isnan(vsc)] = np.nan
+        ts_mask[np.isnan(vsc)] = 0
+
+    else:
+        # print('SPACECRAFT POTENTIAL EMPTY')
+        # ts_mask[:] = np.nan
+        ts_mask[:] = 0
+
+        
+    return ts_mask
+
+def _check_aspoc(ts_mask, tint, ic):
+    try:
+        aspoc = mms.get_data('ionc_aspoc_srvy_l2', tint, ic)
+    except FileNotFoundError:
+        # print('NO ASPOC DATA FOR', tint, '--- SKIPPING')
+        return None
+
+    # Keep only data where ASPOC is OFF (< 5), else NaN
+    aspoc_off = aspoc.where(aspoc < 2, other=0)
+
+    ts_mask = pyrf.resample(ts_mask, aspoc_off.time)
+    # ts_mask[np.isnan(aspoc_off)] = np.nan
+    ts_mask[np.isnan(aspoc_off)] = 0
+
+    
+    return ts_mask
+
+def _split_tint(data, tint):
+    # Identify the time index where data jumps to/from NaN
+    try:
+        diff = data.differentiate(coord='time')
+    except ValueError as e:
+        return []
+    diff_norm = diff / np.max(diff)
+    toggle_idxs = np.where(np.abs(diff_norm) > 0.1)[0]
+    if data.data[-1] == 1.0:
+        toggle_idxs = np.append(toggle_idxs, -1)
+    valid_tints = []
+    start = 0
+    for idx in toggle_idxs:
+        start_time, end_time = data.time.data[start], data.time.data[idx]
+        dt = np.timedelta64(end_time - start_time)
+        if (np.all(data.data[start:idx] == 1)) & (dt > np.timedelta64(10,'s')):
+            
+            valid_tint = [str(start_time), str(end_time)]
+            valid_tints.append(valid_tint)
+            
+        start = idx+1
+
+    if len(valid_tints) > 0:
+        # print(f'\tCutting tint from {tint} to:')
+        for valid_tint in valid_tints:
+            a = 0
+            # print(f'\t{valid_tint}')
+
+    else:
+        # print('\tNO INTERVALS WHERE DATA IS NaN WAS FOUND.')
+        valid_tints = tint
+    return valid_tints
+
+def _check_swmode(tint, ic):
+    ### Detect FPI operational mode
+    # 0 - Solar wind mode OFF
+    # 1 - Solar wind mode ON
+    # 2 - FPI data not available
+    try:
+        dis = mms.get_data('defi_fpi_fast_l2', tint, ic)
+        dis_energies = dis.energy.data
+        # Solar wind tables from G-41 in
+        # https://spdf.gsfc.nasa.gov/pub/data/mms/documents/MMS-CMAD.pdf
+        minDISEnergy_sw, maxDISEnergy_sw = 210.0, 8700.0
+        if np.min(dis_energies) == minDISEnergy_sw and np.max(dis_energies) == maxDISEnergy_sw:
+            sw_mode = 1
+        else:
+            sw_mode = 0
+            
+    except (ValueError, FileNotFoundError, TypeError) as e:
+        # print(e)
+        sw_mode = 2
+
+    return sw_mode
+
+def _preprocess_tints(sw_tints, filepath, ic, flag_swmode = True, flag_foreshock = False):
+    if not os.path.exists(filepath):
+        output_header = ['start', 'end', 'ic', 'swmode']
+        with open(filepath, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(output_header)
+    
+    # Loop through time intervals in sw_tints
+    for i,tint in enumerate(sw_tints):
+        print(f'[{ic}]: {i+1}/{len(sw_tints)}', end='\r', flush=True)
+        tint = tint.tolist()
+        
+        ### Create mask time series that is == 1 for intervals to keep, and == 0 for unwanted intervals
+        ts_axis = np.arange(np.datetime64(tint[0]), np.datetime64(tint[-1]), np.timedelta64(1,'s')).astype('datetime64[ns]')
+        ts_data = np.ones_like(ts_axis)
+        ts_mask = pyrf.ts_scalar(ts_axis, ts_data)
+                
+        ### Check if spacecraft potential data from EDP is availale
+        ts_mask_vsc = _check_vsc(ts_mask, tint, ic)
+        if ts_mask_vsc is None:
+            # print('SKIPPING')
+            continue
+      
+        ### ASPOC status
+        ts_mask_vsc_aspoc = _check_aspoc(ts_mask_vsc, tint, ic)
+        if ts_mask_vsc_aspoc is None:
+            # print('SKIPPING')
+            continue
+        
+        valid_tints = _split_tint(ts_mask_vsc_aspoc, tint)
+
+
+        # for each valid tint in valid_tints, check SW mode and write to file
+        for valid_tint in valid_tints:
+            sw_mode = _check_swmode(valid_tint, ic)
+            with open(filepath, 'a', newline='') as f:
+                writer = csv.writer(f)
+                output = [valid_tint[0], valid_tint[1], ic, sw_mode]
+                writer.writerow(output)
+    print()
+
+
+
+def _preprocess_tint(tint, index, filepath, ic):
+
+
+    # print(f'[{ic}]: {index+1}/{len(sw_tints)}', end='\r', flush=True)
+    print(f'{index+1}', end=' ', flush=True)
+    tint = tint.tolist()
+    
+    ### Create mask time series that is == 1 for intervals to keep, and == 0 for unwanted intervals
+    ts_axis = np.arange(np.datetime64(tint[0]), np.datetime64(tint[-1]), np.timedelta64(1,'s')).astype('datetime64[ns]')
+    ts_data = np.ones_like(ts_axis)
+    ts_mask = pyrf.ts_scalar(ts_axis, ts_data)
+            
+    ### Check if spacecraft potential data from EDP is availale
+    ts_mask_vsc = _check_vsc(ts_mask, tint, ic)
+    if ts_mask_vsc is None:
+        # print('SKIPPING')
+        return
+    
+    ### ASPOC status
+    ts_mask_vsc_aspoc = _check_aspoc(ts_mask_vsc, tint, ic)
+    if ts_mask_vsc_aspoc is None:
+        # print('SKIPPING')
+        return
+    
+    valid_tints = _split_tint(ts_mask_vsc_aspoc, tint)
+
+
+    # for each valid tint in valid_tints, check SW mode and write to file
+    for valid_tint in valid_tints:
+        sw_mode = _check_swmode(valid_tint, ic)
+        with open(filepath, 'a', newline='') as f:
+            writer = csv.writer(f)
+            output = [valid_tint[0], valid_tint[1], ic, sw_mode]
+            writer.writerow(output)
+
+
+
+if __name__ == "__main__":
+    # ic = int(sys.argv[2])  # Read ic from the command-line argument
+    folder = 'sw_tints/'
+    for ic in [4]:#, 2, 3, 4]:
+        filename = f'mms{ic}_sw_tints.txt'
+
+        write_path = folder+'compiled_sw_tints'
+
+        # Get the list of all valid solar wind tints
+        sw_tints = np.genfromtxt(folder+filename, dtype=str)
+        total_events = len(sw_tints)
+        
+        # Get number of workers from command-line argument
+        num_workers = int(sys.argv[1]) if len(sys.argv) > 1 else 4  # Default to 4
+
+        print(f"Using {num_workers} parallel workers...")
+        if not os.path.exists(write_path):
+            output_header = ['start', 'end', 'ic', 'swmode']
+            with open(write_path, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(output_header)
+
+        # Run in parallel using multiprocessing with progress tracking
+        with mp.Pool(num_workers) as pool:
+            results = pool.starmap(_preprocess_tint, [(tint, i, write_path, ic) for i, tint in enumerate(sw_tints[3329:])])
+
