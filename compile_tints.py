@@ -100,33 +100,26 @@ def _split_tint(data, tint):
     try:
         diff = data.differentiate(coord='time')
     except ValueError as e:
-        return []
-    diff_norm = diff / np.max(diff)
+        return None
+    
+    diff_norm = diff / (np.max(diff) + 1e-6)
     toggle_idxs = np.where(np.abs(diff_norm) > 0.1)[0]
+    
+    # Make sure end point of tint is included if mask == 1 there
     if data.data[-1] == 1.0:
         toggle_idxs = np.append(toggle_idxs, -1)
+        
     valid_tints = []
     start = 0
     for idx in toggle_idxs:
         start_time, end_time = data.time.data[start], data.time.data[idx]
         dt = np.timedelta64(end_time - start_time)
         if (np.all(data.data[start:idx] == 1)) & (dt > np.timedelta64(10,'s')):
-            
             valid_tint = [str(start_time), str(end_time)]
             valid_tints.append(valid_tint)
-            
         start = idx+1
 
-    if len(valid_tints) > 0:
-        # print(f'\tCutting tint from {tint} to:')
-        for valid_tint in valid_tints:
-            a = 0
-            # print(f'\t{valid_tint}')
-
-    else:
-        # print('\tNO INTERVALS WHERE DATA IS NaN WAS FOUND.')
-        valid_tints = tint
-    return valid_tints
+    return valid_tints if len(valid_tints) > 0 else [tint]
 
 def _check_swmode(tint, ic):
     ### Detect FPI operational mode
@@ -193,12 +186,19 @@ def _preprocess_tints(sw_tints, filepath, ic, flag_swmode = True, flag_foreshock
 
 
 
-def _preprocess_tint(tint, index, filepath, ic):
+def _log_failed(failpath, tint, ic, message, index):
+    with open(failpath, 'a', newline='') as f:
+        writer = csv.writer(f)
+        output = [tint[0], tint[1], ic, 2, message, index]
+        writer.writerow(output)
+    print(f'({index+1})', end=' ', flush=True)
+    
 
-
-    # print(f'[{ic}]: {index+1}/{len(sw_tints)}', end='\r', flush=True)
-    print(f'{index+1}', end=' ', flush=True)
+def _preprocess_tint(tint, index, filepath, failpath, ic):
     tint = tint.tolist()
+    if len(tint) != 2:
+        _log_failed(failpath, tint, ic, 'Tint len != 2', index)
+        return  
     
     ### Create mask time series that is == 1 for intervals to keep, and == 0 for unwanted intervals
     ts_axis = np.arange(np.datetime64(tint[0]), np.datetime64(tint[-1]), np.timedelta64(1,'s')).astype('datetime64[ns]')
@@ -208,38 +208,47 @@ def _preprocess_tint(tint, index, filepath, ic):
     ### Check if spacecraft potential data from EDP is availale
     ts_mask_vsc = _check_vsc(ts_mask, tint, ic)
     if ts_mask_vsc is None:
-        # print('SKIPPING')
+        _log_failed(failpath, tint, ic, '_check_vsc failed', index)
         return
     
     ### ASPOC status
     ts_mask_vsc_aspoc = _check_aspoc(ts_mask_vsc, tint, ic)
     if ts_mask_vsc_aspoc is None:
-        # print('SKIPPING')
+        _log_failed(failpath, tint, ic, '_check_aspoc failed', index)
         return
     
+    ### Split original tint into smaller ones where both ASPOC OFF and Vsc available
     valid_tints = _split_tint(ts_mask_vsc_aspoc, tint)
+    if valid_tints is None:
+        _log_failed(failpath, tint, ic, '_split_tint failed', index)
+        return
 
-
-    # for each valid tint in valid_tints, check SW mode and write to file
+    # For each valid tint in valid_tints, check SW mode and write to file
     for valid_tint in valid_tints:
         sw_mode = _check_swmode(valid_tint, ic)
         with open(filepath, 'a', newline='') as f:
             writer = csv.writer(f)
             output = [valid_tint[0], valid_tint[1], ic, sw_mode]
             writer.writerow(output)
+            
+    print(f'[{index+1}]', end=' ', flush=True)
 
 
 
 if __name__ == "__main__":
-    # ic = int(sys.argv[2])  # Read ic from the command-line argument
     folder = 'sw_tints/'
-    for ic in [4]:#, 2, 3, 4]:
+    for ic in [1, 2, 3, 4]:
+        print('\n'+str(ic)+'\n')
         filename = f'mms{ic}_sw_tints.txt'
 
-        write_path = folder+'compiled_sw_tints'
-
+        # write_path = folder+'compiled_sw_tints_test.csv'
+        # failed_path = folder+'failed_tints_test.csv'
+        
+        write_path = folder+'compiled_sw_tints.csv'
+        failed_path = folder+'failed_tints.csv'
+        
         # Get the list of all valid solar wind tints
-        sw_tints = np.genfromtxt(folder+filename, dtype=str)
+        sw_tints = np.genfromtxt(folder+filename, dtype=str, delimiter='')
         total_events = len(sw_tints)
         
         # Get number of workers from command-line argument
@@ -251,8 +260,16 @@ if __name__ == "__main__":
             with open(write_path, "w", newline="") as f:
                 writer = csv.writer(f)
                 writer.writerow(output_header)
+                
+        if not os.path.exists(failed_path):
+            # failed events
+            output_header = ['start', 'end', 'ic', 'swmode', 'errmsg', 'index']
+            with open(failed_path, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(output_header)
+                
 
         # Run in parallel using multiprocessing with progress tracking
         with mp.Pool(num_workers) as pool:
-            results = pool.starmap(_preprocess_tint, [(tint, i, write_path, ic) for i, tint in enumerate(sw_tints[3329:])])
+            results = pool.starmap(_preprocess_tint, [(tint, i, write_path, failed_path, ic) for i, tint in enumerate(sw_tints[:])], chunksize=32)
 
