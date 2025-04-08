@@ -40,10 +40,6 @@ def epsd_peakfinder(epsd_data, power_threshold, frequency_lims=[5.88800e3, 8e4])
     epsd_cut = epsd_cut.where(epsd_cut >= power_threshold, 0) # Only keep points with sufficient amplitude
     epsd_cut = epsd_cut[:, fmin_idx:fmax_idx] # Keep data in freq. range
 
-    # Normalize spectra: broadcast max normalization across time
-    # max_vals = epsd_cut.max(dim="E_Freq")
-    # epsd_slice = epsd_sub / max_vals
-
     # Normalize at every time
     spectra_norm = np.divide(epsd_cut, np.max(epsd_cut, axis=1)).data
     # Iterate over time points
@@ -53,7 +49,7 @@ def epsd_peakfinder(epsd_data, power_threshold, frequency_lims=[5.88800e3, 8e4])
         spectrum = np.where(spectrum > 0, spectrum, 0)  # Zero out negative values
     
         # Find peaks
-        peaks, _ = signal.find_peaks(spectrum, width=(1,3), threshold=0.8)
+        peaks, _ = signal.find_peaks(spectrum, width=(1,3), threshold=0.4)
         if len(peaks) > 0:
             # Default to highest frequency peak if multiple found
             best_peak_idx = peaks[np.argmax(freq_axis[fmin_idx + peaks])]
@@ -71,7 +67,7 @@ def epsd_peakfinder(epsd_data, power_threshold, frequency_lims=[5.88800e3, 8e4])
     median_peak = _weighted_median(peaks_f_ts.data, weights)
         
     # Only keep peaks within certain range of weighted median
-    peaks_f_ts_final = peaks_f_ts.where(abs(peaks_f_ts - median_peak) < 1*np.std(peaks_f_ts))
+    peaks_f_ts_final = peaks_f_ts.where(abs(peaks_f_ts - median_peak) < 3*np.std(peaks_f_ts))
     
     
     return epsd_cut, peaks_f_ts_final, median_peak
