@@ -4,11 +4,12 @@ import logging
 import os
 import csv
 import sys
+import time
 
 from pyrfu import mms, pyrf
 
 import multiprocessing as mp
-from tqdm import tqdm
+
 
 # Suppress INFO messages
 logger = logging.getLogger()
@@ -61,36 +62,37 @@ def _check_vsc(ts_mask, tint, ic):
         # print('NO EDP DATA FOUND FOR TINT', tint, '--- SKIPPING!')
         return None
 
-
     if vsc_.time.size > 0:
         vsc = vsc_.drop_duplicates(dim='time')
-        # ts_mask = pyrf.resample(ts_mask, vsc.time)
-        vsc = pyrf.resample(vsc, ts_mask.time)
-
-        # ts_mask[np.isnan(vsc)] = np.nan
-        ts_mask[np.isnan(vsc)] = 0
-
+        vsc = pyrf.resample(vsc, ts_mask.time)#, method='linear')
+        # Make exception for single NaN in vsc, can happen when time series goes over midnight?
+        nans = np.argwhere(np.isnan(vsc.data))[:,0]
+        ts_mask[nans] = 0
+        if len(nans) < 10:
+            for nan in nans:
+                if vsc[nan-1] != None and vsc[nan+1] != None:
+                    ts_mask[nan] = 1
+        
     else:
-        # print('SPACECRAFT POTENTIAL EMPTY')
-        # ts_mask[:] = np.nan
         ts_mask[:] = 0
-
         
     return ts_mask
 
 def _check_aspoc(ts_mask, tint, ic):
     try:
-        aspoc = mms.get_data('ionc_aspoc_srvy_l2', tint, ic)
+        aspoc = mms.get_data('ionc_aspoc_srvy_l2', tint, ic).drop_duplicates(dim='time')
     except FileNotFoundError:
         # print('NO ASPOC DATA FOR', tint, '--- SKIPPING')
         return None
 
-    # Keep only data where ASPOC is OFF (< 5), else NaN
-    aspoc_off = aspoc.where(aspoc < 2, other=0)
+    # Keep only data where ASPOC is OFF (< 2), else NaN
+    aspoc_off = aspoc.where(aspoc < 2, other=None)
 
     ts_mask = pyrf.resample(ts_mask, aspoc_off.time)
     # ts_mask[np.isnan(aspoc_off)] = np.nan
     ts_mask[np.isnan(aspoc_off)] = 0
+    # ts_mask[aspoc_off] = 0
+    
 
     
     return ts_mask
@@ -102,13 +104,13 @@ def _split_tint(data, tint):
     except ValueError as e:
         return None
     
-    diff_norm = diff / (np.max(diff) + 1e-6)
+    diff_norm = diff / (np.max(diff) + 1e-9)
     toggle_idxs = np.where(np.abs(diff_norm) > 0.1)[0]
     
     # Make sure end point of tint is included if mask == 1 there
     if data.data[-1] == 1.0:
         toggle_idxs = np.append(toggle_idxs, -1)
-        
+
     valid_tints = []
     start = 0
     for idx in toggle_idxs:
@@ -117,6 +119,7 @@ def _split_tint(data, tint):
         if (np.all(data.data[start:idx] == 1)) & (dt > np.timedelta64(10,'s')):
             valid_tint = [str(start_time), str(end_time)]
             valid_tints.append(valid_tint)
+
         start = idx+1
 
     return valid_tints if len(valid_tints) > 0 else [tint]
@@ -143,48 +146,6 @@ def _check_swmode(tint, ic):
 
     return sw_mode
 
-def _preprocess_tints(sw_tints, filepath, ic, flag_swmode = True, flag_foreshock = False):
-    if not os.path.exists(filepath):
-        output_header = ['start', 'end', 'ic', 'swmode']
-        with open(filepath, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(output_header)
-    
-    # Loop through time intervals in sw_tints
-    for i,tint in enumerate(sw_tints):
-        print(f'[{ic}]: {i+1}/{len(sw_tints)}', end='\r', flush=True)
-        tint = tint.tolist()
-        
-        ### Create mask time series that is == 1 for intervals to keep, and == 0 for unwanted intervals
-        ts_axis = np.arange(np.datetime64(tint[0]), np.datetime64(tint[-1]), np.timedelta64(1,'s')).astype('datetime64[ns]')
-        ts_data = np.ones_like(ts_axis)
-        ts_mask = pyrf.ts_scalar(ts_axis, ts_data)
-                
-        ### Check if spacecraft potential data from EDP is availale
-        ts_mask_vsc = _check_vsc(ts_mask, tint, ic)
-        if ts_mask_vsc is None:
-            # print('SKIPPING')
-            continue
-      
-        ### ASPOC status
-        ts_mask_vsc_aspoc = _check_aspoc(ts_mask_vsc, tint, ic)
-        if ts_mask_vsc_aspoc is None:
-            # print('SKIPPING')
-            continue
-        
-        valid_tints = _split_tint(ts_mask_vsc_aspoc, tint)
-
-
-        # for each valid tint in valid_tints, check SW mode and write to file
-        for valid_tint in valid_tints:
-            sw_mode = _check_swmode(valid_tint, ic)
-            with open(filepath, 'a', newline='') as f:
-                writer = csv.writer(f)
-                output = [valid_tint[0], valid_tint[1], ic, sw_mode]
-                writer.writerow(output)
-    print()
-
-
 
 def _log_failed(failpath, tint, ic, message, index):
     with open(failpath, 'a', newline='') as f:
@@ -195,7 +156,8 @@ def _log_failed(failpath, tint, ic, message, index):
     
 
 def _preprocess_tint(tint, index, filepath, failpath, ic):
-    tint = tint.tolist()
+    if type(tint) != list:
+        tint = tint.tolist()
     if len(tint) != 2:
         _log_failed(failpath, tint, ic, 'Tint len != 2', index)
         return  
@@ -230,31 +192,38 @@ def _preprocess_tint(tint, index, filepath, failpath, ic):
             writer = csv.writer(f)
             output = [valid_tint[0], valid_tint[1], ic, sw_mode]
             writer.writerow(output)
-            
-    print(f'[{index+1}]', end=' ', flush=True)
-
+    # Print progress
+    update_percent = numtot // 21
+    if np.mod(index, update_percent) == 0:
+        # print(f'{(index/numtot)*100:.2f} %', end=' ', flush=True)
+        print(f'|', end='', flush=True)
+        
+    return valid_tints
 
 
 if __name__ == "__main__":
     folder = 'sw_tints/'
+    total_time_mins = 0
     for ic in [1, 2, 3, 4]:
-        print('\n'+str(ic)+'\n')
+        print('\n'+f'Compiling tints for MMS{ic}', end=' ')
         filename = f'mms{ic}_sw_tints.txt'
 
         # write_path = folder+'compiled_sw_tints_test.csv'
         # failed_path = folder+'failed_tints_test.csv'
         
-        write_path = folder+'compiled_sw_tints.csv'
-        failed_path = folder+'failed_tints.csv'
+        write_path = folder+'compiled_sw_tints4.csv'
+        failed_path = folder+'failed_tints4.csv'
         
         # Get the list of all valid solar wind tints
         sw_tints = np.genfromtxt(folder+filename, dtype=str, delimiter='')
-        total_events = len(sw_tints)
+        global numtot
+        numtot = len(sw_tints)
         
         # Get number of workers from command-line argument
         num_workers = int(sys.argv[1]) if len(sys.argv) > 1 else 4  # Default to 4
 
-        print(f"Using {num_workers} parallel workers...")
+        print(f"using {num_workers} parallel workers.")
+        print('|0--25--50--75--100%|')
         if not os.path.exists(write_path):
             output_header = ['start', 'end', 'ic', 'swmode']
             with open(write_path, "w", newline="") as f:
@@ -267,9 +236,22 @@ if __name__ == "__main__":
             with open(failed_path, 'w', newline='') as f:
                 writer = csv.writer(f)
                 writer.writerow(output_header)
-                
-
+        
+        # Start time  
+        sc_time_start = time.time() 
+        
         # Run in parallel using multiprocessing with progress tracking
         with mp.Pool(num_workers) as pool:
-            results = pool.starmap(_preprocess_tint, [(tint, i, write_path, failed_path, ic) for i, tint in enumerate(sw_tints[:])], chunksize=32)
-
+            results = pool.starmap(_preprocess_tint, [(tint, i,write_path, failed_path, ic) for i, tint in enumerate(sw_tints[:])], chunksize=32)
+        
+        # End time
+        sc_time_end = time.time()
+        single_time_mins = (sc_time_end - sc_time_start) / 60
+        print(f'\n> MMS{ic} finished in {single_time_mins:.2f} minutes')
+        total_time_mins += single_time_mins
+    print(24*'-')
+    if total_time_mins < 1:
+        print(f'Finished in {total_time_mins*60:.2f} seconds')
+        
+    else:
+        print(f'Finished in {total_time_mins:.2f} minutes')
