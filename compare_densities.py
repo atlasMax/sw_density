@@ -15,8 +15,6 @@ from multiprocessing import Pool
 
 mms.db_init(default="local", local="../../../data/mms")
 
-ic = 1
-
 
 def calculate_plasma_frequency(inp, inverse=False):
     """Convert number density in cc to plasma frequency or vice versa."""

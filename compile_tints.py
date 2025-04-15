@@ -84,15 +84,17 @@ def _check_aspoc(ts_mask, tint, ic):
     except FileNotFoundError:
         # print('NO ASPOC DATA FOR', tint, '--- SKIPPING')
         return None
+    
+    aspoc = pyrf.resample(aspoc, ts_mask.time, method='linear')
 
     # Keep only data where ASPOC is OFF (< 2), else NaN
     aspoc_off = aspoc.where(aspoc < 2, other=None)
 
-    ts_mask = pyrf.resample(ts_mask, aspoc_off.time)
-    # ts_mask[np.isnan(aspoc_off)] = np.nan
-    ts_mask[np.isnan(aspoc_off)] = 0
-    # ts_mask[aspoc_off] = 0
+    # ts_mask = pyrf.resample(ts_mask, aspoc_off.time)
     
+
+    ts_mask[np.isnan(aspoc_off)] = 0
+ 
 
     
     return ts_mask
@@ -155,7 +157,7 @@ def _log_failed(failpath, tint, ic, message, index):
     print(f'({index+1})', end=' ', flush=True)
     
 
-def _preprocess_tint(tint, index, filepath, failpath, ic):
+def _preprocess_tint(tint, index, filepath, failpath, ic, print_progress = False):
     if type(tint) != list:
         tint = tint.tolist()
     if len(tint) != 2:
@@ -193,11 +195,12 @@ def _preprocess_tint(tint, index, filepath, failpath, ic):
             output = [valid_tint[0], valid_tint[1], ic, sw_mode]
             writer.writerow(output)
     # Print progress
-    update_percent = numtot // 21
-    if np.mod(index, update_percent) == 0:
-        # print(f'{(index/numtot)*100:.2f} %', end=' ', flush=True)
-        print(f'|', end='', flush=True)
-        
+    if print_progress:
+        update_percent = numtot // 21
+        if np.mod(index, update_percent) == 0:
+            # print(f'{(index/numtot)*100:.2f} %', end=' ', flush=True)
+            print(f'|', end='', flush=True)
+            
     return valid_tints
 
 
@@ -240,7 +243,7 @@ if __name__ == "__main__":
         # Start time  
         sc_time_start = time.time() 
         
-        # Run in parallel using multiprocessing with progress tracking
+        # Run in parallel using multiprocessing 
         with mp.Pool(num_workers) as pool:
             results = pool.starmap(_preprocess_tint, [(tint, i,write_path, failed_path, ic) for i, tint in enumerate(sw_tints[:])], chunksize=32)
         

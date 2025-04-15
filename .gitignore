@@ -1,2 +1,6 @@
 __pycache__/
 *.ipynb_checkpoints/
+output_data/MMS*
+*txt
+*log
+!*sw_tints.txt
