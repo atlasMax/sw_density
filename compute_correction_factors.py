@@ -49,7 +49,7 @@ def _tint2windows(time_axis, window_len = None):
 def _read_data(cdf_filename):
         #units', 'beta', 'N0', 'ic', 'tint'
     ne_fit = xr.open_dataarray(cdf_filename)
-    _, beta, N0, ic, tint,_ = ne_fit.attrs.values()
+    _, beta, N0, ic, tint, sw_mode = ne_fit.attrs.values()
     
     try:
         ne_fpi = mms.get_data('ne_fpi_fast_l2', tint, ic).drop_duplicates(dim='time')
@@ -86,7 +86,7 @@ def _read_data(cdf_filename):
     if len(ne_fpi) == 0 or len(ne_fit) == 0 or len(vsc) == 0:
         return None
     else:
-        return ne_fit, ne_fpi, t_e, vsc, N0, beta, ic, tint
+        return ne_fit, ne_fpi, t_e, vsc, N0, beta, ic, tint, sw_mode
 
 
 def _safe_mean(dataarray):
@@ -101,7 +101,7 @@ def _write_to_csv(folderpath, output):
     os.makedirs(folderpath, exist_ok=True)
     if not os.path.exists(folderpath+filename):
         output_header = [
-            'start', 'end', 'c0', 'vsc_mean', 't_e_mean', 'beta', 'N0', 'ic'
+            'start', 'end', 'c0', 'vsc_mean', 't_e_mean', 'beta', 'N0', 'ic', 'sw_mode'
         ]
         with open(folderpath+filename, "w", newline="") as f:
             writer = csv.writer(f)
@@ -132,7 +132,7 @@ def calc_fpi_corr(cdf_filename, outpath, progress_track=None):
         _print_output(logstatus+'X')
         return 
     else:
-        ne_fit, ne_fpi, t_e, vsc, N0, beta, ic, tint = data_result
+        ne_fit, ne_fpi, t_e, vsc, N0, beta, ic, tint, sw_mode = data_result
     # Downsample fpi data to obtained fit timeline (spacecraft spin res.)
     timeline_resamp = ne_fit.time
     ne_fpi_downsamp = pyrf.resample(ne_fpi, timeline_resamp)
@@ -172,11 +172,12 @@ def calc_fpi_corr(cdf_filename, outpath, progress_track=None):
             t_e_mean,
             beta,
             N0,
-            ic
+            ic,
+            sw_mode
         ]
         # write to file
         _write_to_csv(outpath, output)
-        _print_output(logstatus+'Y')
+    _print_output(logstatus+'Y')
     
 if __name__ == "__main__":
     cdf_filename='varg'
