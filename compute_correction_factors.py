@@ -121,7 +121,7 @@ def _cdf_filename2datestr(cdf_filename):
     return datestr_fmt
 
 
-def calc_fpi_corr(cdf_filename, outpath, progress_track=None):
+def calc_fpi_corr(cdf_filename, outpath=None, progress_track=None):
     logstatus = ''
     if progress_track is not None:
         index, tot = progress_track
@@ -140,6 +140,8 @@ def calc_fpi_corr(cdf_filename, outpath, progress_track=None):
     # split data into subtints
     window_len_s = 600
     window_tints = _tint2windows(timeline_resamp, window_len_s)
+    # Store output of every segment
+    output_list = []
     for window_tint in window_tints:
         ne_fit_clip = pyrf.time_clip(ne_fit, window_tint)
         ne_fpi_clip = pyrf.time_clip(ne_fpi_downsamp, window_tint)
@@ -164,20 +166,36 @@ def calc_fpi_corr(cdf_filename, outpath, progress_track=None):
         
         # prepare output
         start_str, stop_str = str(window_tint[0]), str(window_tint[-1])
-        output = [
+        output = (
             start_str,
             stop_str,
-            c0,
-            vsc_mean,
-            t_e_mean,
-            beta,
-            N0,
-            ic,
-            sw_mode
-        ]
-        # write to file
-        _write_to_csv(outpath, output)
+            float(c0),
+            float(vsc_mean),
+            float(t_e_mean),
+            float(beta),
+            float(N0),
+            int(ic),
+            int(sw_mode)
+        )
+        # write to file if outpath provided, else just return output data (for single function calls)
+        if outpath is not None:
+            _write_to_csv(outpath, output)
+            
+        else:
+            output_list.append(output)
+        
     _print_output(logstatus+'Y')
+    # Prevent returning if called from loop over all tints, written to files instead
+    if outpath is None:
+        # Convert to record array to specify dtypes of every element
+        dtypes = [
+            ('start_str', 'U30'), ('stop_str', 'U30'),
+            ('c0', 'f8'), ('vsc_mean', 'f8'), ('t_e_mean', 'f8'),
+            ('beta', 'f8'), ('N0', 'f8'),
+            ('ic', 'i4'), ('sw_mode', 'i4')
+        ]
+        output_arr = np.array(output_list, dtype=dtypes)
+        return output_arr
     
 if __name__ == "__main__":
     cdf_filename='varg'
