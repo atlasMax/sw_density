@@ -4,3 +4,10 @@ output_data/MMS*
 *txt
 *log
 !*sw_tints.txt
+sw_tints/
+output_data_new_2/
+output_data_new/
+output_data/
+/figures/examples
+startup.m
+.vscode/

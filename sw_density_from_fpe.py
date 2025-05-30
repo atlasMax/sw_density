@@ -123,6 +123,10 @@ def _preprocess_epsd_data(epsd_data, power_threshold, freq_lims):
 
     # Filter spectral data
     epsd_cut = epsd_data - epsd_data.median(dim="time") # Subtract median to remove presistent noise
+    
+    # Add back attrs
+    epsd_cut.attrs = epsd_data.attrs
+    
     epsd_cut = epsd_cut.where(epsd_cut >= power_threshold, 0) # Only keep points with sufficient amplitude
     epsd_cut = epsd_cut[:, fmin_idx:fmax_idx] # Keep data in freq. range
 
