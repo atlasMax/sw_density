@@ -14,10 +14,11 @@ def get_cdf_filenames(folder: str, mode: str = "all", n: int = 5):
     
     # Look at all subdirectories and collect .cdf file paths
     filenames = []
-    for root, _, files in os.walk(folder):
-        for f in files:
-            if f.endswith(".cdf"):
-                filenames.append(os.path.join(root, f))
+    for ic in range(1, 5):
+        for root, _, files in os.walk(f'{folder}/MMS{int(ic)}'):
+            for f in files:
+                if f.endswith(".cdf"):
+                    filenames.append(os.path.join(root, f))
 
     if mode == "random":
         return random.sample(filenames, 1)
@@ -128,13 +129,13 @@ def _safe_mean(dataarray):
 
 def _write_to_csv(folderpath, output_list):
     
-    filename = 'density_correction_stats_full_BVR_0523.csv'
+    filename = 'density_correction_stats_full_BVR_0602.csv'
     
     # Ensure file exists and write header if not present
     os.makedirs(folderpath, exist_ok=True)
     if not os.path.exists(folderpath+filename):
         output_header = [
-            'start', 'end', 'ce', 'ci', 'ne_fit', 'ne_fpi', 'ni_fpi', 'vex_fpi', 'vey_fpi', 'vez_fpi', 'vix_fpi', 'viy_fpi', 'viz_fpi', 't_e', 't_i', 'bx', 'by', 'bz', 'rx', 'ry', 'rz', 'vsc', 'N0', 'beta', 'ic', 'tint', 'sw_mode'
+            'start', 'end', 'ce', 'ci', 'ne_fit', 'ne_fpi', 'ni_fpi', 'vex_fpi', 'vey_fpi', 'vez_fpi', 'vix_fpi', 'viy_fpi', 'viz_fpi', 't_e', 't_i', 'bx', 'by', 'bz', 'rx', 'ry', 'rz', 'vsc', 'N0', 'beta', 'ic', 'sw_mode'
         ]
         with open(folderpath+filename, "w", newline="") as f:
             writer = csv.writer(f)

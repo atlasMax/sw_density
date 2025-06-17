@@ -13,7 +13,7 @@ sw_ends = ionfs_ends[ionfs_flags == 0]
 
 def _write_to_csv(folderpath, out):
 
-    filename = 'only_sw_tints_BVR_0527.csv'
+    filename = 'only_sw_tints_BVR_0602.csv'
 
     # Ensure file exists and write header if not present
     os.makedirs(folderpath, exist_ok=True)
@@ -38,7 +38,7 @@ def _write_to_csv(folderpath, out):
         writer.writerow(out)  
 
 
-density_data = np.genfromtxt(f'output_data_new_2/stats/density_correction_stats_full_BVR_0523.csv', delimiter=',', names=True, skip_header=0, dtype=None)
+density_data = np.genfromtxt(f'output_data_new_2/stats/density_correction_stats_full_BVR_0602.csv', delimiter=',', names=True, skip_header=0, dtype=None)
 folderpath = 'output_data_new_2/stats/'
 for data_tint in density_data[:]:
     t_start = np.datetime64(data_tint[0])
