@@ -11,3 +11,7 @@ output_data/
 /figures/examples
 startup.m
 .vscode/
+sw_tints_2026/compiled_sw_tints.csv
+.gitignore
+sw_tints_2026/used_regionfiles.csv
+sw_tints_2026/failed_sw_tints.csv
